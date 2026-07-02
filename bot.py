@@ -1,4 +1,4 @@
-mport os
+import os
 import requests
 import xml.etree.ElementTree as ET
 import telebot
