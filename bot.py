@@ -7,7 +7,7 @@ from flask import Flask
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # 🔑 CONFIGURATION (N'oublie pas de remettre tes clés !)
-TELEGRAM_TOKEN = "8749995509:AAF2WPP7l4wGDJuOcbBVrujtTbPmxzfZUww"
+TELEGRAM_TOKEN = "8749995509:AAGpSgdK1qjm2gul0HKoSRhJtFie_JoRLy4"
 ALLDEBRID_API_KEY = "1j7FJtz9XDWpRaJEwrSz"
 C411_PASSKEY = "6d36be5091e57dc7a92d61ae5e688bbe" 
 
