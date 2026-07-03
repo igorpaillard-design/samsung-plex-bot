@@ -1,18 +1,19 @@
 import os
 import requests
 import telebot
+import urllib.parse
 from flask import Flask
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# --- ⚙️ VARIABLES D'ENVIRONNEMENT (Strictement calquées sur Render) ---
+# --- ⚙️ VARIABLES D'ENVIRONNEMENT ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 C411_API_KEY = os.environ.get("C411_API_KEY") 
+SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY")
 ALLDEBRID_TOKEN = os.environ.get("ALLDEBRID_TOKEN")
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
 
-# Stockage temporaire des liens torrents
 torrent_storage = {}
 
 @app.route('/')
@@ -21,70 +22,68 @@ def home():
 
 @bot.message_handler(commands=['search'])
 def search_torrent(message):
-    # Récupération du mot-clé recherché
     query = message.text.replace('/search ', '').strip()
     if not query:
         bot.reply_to(message, "❌ Saisis un film après la commande.\nExemple : `/search Gladiator`", parse_mode="Markdown")
         return
 
-    status_msg = bot.reply_to(message, f"🔍 Recherche de *{query}* sur C411...", parse_mode="Markdown")
+    status_msg = bot.reply_to(message, f"🔍 Recherche sécurisée de *{query}*...", parse_mode="Markdown")
 
-    # URL API standard Torznab / Newznab utilisée par C411
-    api_url = f"https://www.c411.org/api.php?apikey={C411_API_KEY}&t=search&q={query}&o=json"
+    # 1. On prépare l'URL de l'API C411
+    target_url = f"https://www.c411.org/api.php?apikey={C411_API_KEY}&t=search&q={query}&o=json"
+    
+    # 2. On l'encode proprement pour le proxy
+    encoded_url = urllib.parse.quote(target_url)
+    
+    # 3. On fait passer la requête par ScraperAPI (sans render=true pour que ce soit rapide et au format JSON)
+    proxy_url = f"https://api.scraperapi.com?api_key={SCRAPERAPI_KEY}&url={encoded_url}"
 
     try:
-        # Navigateur simulé pour éviter le rejet automatique du serveur
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        response = requests.get(api_url, headers=headers, timeout=15)
+        response = requests.get(proxy_url, timeout=25)
         
         if response.status_code != 200:
-            bot.edit_message_text(f"❌ L'API C411 a répondu par une erreur {response.status_code}.", chat_id=message.chat.id, message_id=status_msg.message_id)
+            bot.edit_message_text(f"❌ Le proxy a renvoyé une erreur {response.status_code}.", chat_id=message.chat.id, message_id=status_msg.message_id)
             return
 
         data = response.json()
         
-        # Extraction des résultats dans la structure JSON classique
-        channel = data.get('channel', {})
-        items = channel.get('item', []) if isinstance(channel, dict) else []
-        
-        # Si la structure est plus simple (directement une liste ou dans 'result')
-        if not items and isinstance(data, dict):
-            items = data.get('item', []) or data.get('results', [])
-        if not items and isinstance(data, list):
+        # Extraction intelligente selon la structure renvoyée
+        items = []
+        if isinstance(data, dict):
+            if 'channel' in data and isinstance(data['channel'], dict):
+                items = data['channel'].get('item', [])
+            else:
+                items = data.get('item', []) or data.get('results', [])
+        elif isinstance(data, list):
             items = data
 
         if not items:
-            bot.edit_message_text(f"😕 Aucun résultat trouvé pour : *{query}*.\nVérifie l'orthographe du film.", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+            bot.edit_message_text(f"😕 Aucun résultat trouvé pour : *{query}*.", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
             return
 
-        # Nettoyage du message de statut avant d'afficher les films
         bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
         bot.send_message(message.chat.id, f"🍿 **Résultats C411 pour *{query}* :**", parse_mode="Markdown")
 
         count = 0
         for item in items:
-            if count >= 5: # On limite à 5 résultats pour ne pas spammer Telegram
+            if count >= 5:
                 break
                 
             title = item.get('title') or item.get('name')
-            # Récupération du lien de téléchargement du fichier torrent
-            torrent_link = item.get('link') or item.get('enclosure', {}).get('@url')
+            torrent_link = item.get('link') or item.get('enclosure', {}).get('@url') or item.get('download')
             
             if not title or not torrent_link:
                 continue
 
-            # Filtre pour éviter les doublons DV (Dolby Vision) si pas HDR
             if "DV" in title.upper() and "HDR" not in title.upper():
                 continue
 
-            # Création d'un identifiant unique court pour le bouton Telegram
             torrent_id = f"t_{hash(torrent_link) & 0xffffffff}"
             torrent_storage[torrent_id] = {
                 "title": title,
                 "link": torrent_link
             }
 
-            # Bouton d'action AllDebrid
             markup = InlineKeyboardMarkup()
             btn_debrid = InlineKeyboardButton(text="🚀 Envoyer au NAS (AllDebrid)", callback_data=torrent_id)
             markup.add(btn_debrid)
@@ -93,7 +92,7 @@ def search_torrent(message):
             count += 1
 
     except Exception as e:
-        bot.edit_message_text(f"❌ Erreur lors de la recherche. Vérifie que ta clé API dans Render est correcte.", chat_id=message.chat.id, message_id=status_msg.message_id)
+        bot.edit_message_text(f"❌ Erreur de connexion ou clé API invalide.", chat_id=message.chat.id, message_id=status_msg.message_id)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('t_'))
@@ -108,7 +107,6 @@ def handle_debrid_click(call):
     torrent_data = torrent_storage[torrent_id]
     
     try:
-        # Envoi du lien torrent à l'API AllDebrid pour déclencher le téléchargement sur le NAS
         alldebrid_url = f"https://api.alldebrid.com/v4/magnet/upload?agent=samsungbot&apikey={ALLDEBRID_TOKEN}"
         payload = {'magnets[]': torrent_data["link"]}
         
