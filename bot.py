@@ -1,15 +1,13 @@
 import os
 import requests
 import telebot
-import urllib.parse
 from flask import Flask
-from xml.etree import ElementTree
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# --- ⚙️ RÉCUPÉRATION SÉCURISÉE DES CONFIGURATIONS ---
+# --- ⚙️ RÉCUPÉRATION DES VARIABLES SUR RENDER ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-C411_PASSKEY = os.environ.get("C411_PASSKEY")
-SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY")
+# ICI : Assure-toi que la variable "C411_PASSKEY" sur Render contient bien ta Clé API C411 !
+C411_API_KEY = os.environ.get("C411_PASSKEY") 
 ALLDEBRID_TOKEN = os.environ.get("ALLDEBRID_TOKEN")
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
@@ -28,42 +26,44 @@ def search_torrent(message):
         bot.reply_to(message, "❌ Saisis un film après la commande.\nExemple : `/search Gladiator`", parse_mode="Markdown")
         return
 
-    status_msg = bot.reply_to(message, f"🔍 Recherche de *{query}* via ScraperAPI sur C411...", parse_mode="Markdown")
+    status_msg = bot.reply_to(message, f"🔍 Recherche de *{query}* via l'API C411...", parse_mode="Markdown")
 
-    # 1. L'URL ultra-précise avec les www.
-    target_url = f"https://www.c411.org/rss.php?sh={query}&passkey={C411_PASSKEY}"
-    
-    # 2. On protège l'URL pour ScraperAPI
-    encoded_url = urllib.parse.quote(target_url)
-    
-    # 3. On appelle le proxy en mode classique (rapide, sans render graphique inutile pour du XML)
-    proxy_url = f"https://api.scraperapi.com?api_key={SCRAPERAPI_KEY}&url={encoded_url}"
+    # Utilisation de l'endpoint API officiel de C411 (format JSON, beaucoup plus stable)
+    api_url = f"https://www.c411.org/api.php?apikey={C411_API_KEY}&search={query}&t=search&o=json"
 
     try:
-        response = requests.get(proxy_url, timeout=25)
+        headers = {'User-Agent': 'SamsungPlexBot/1.0'}
+        response = requests.get(api_url, headers=headers, timeout=15)
         
         if response.status_code != 200:
-            bot.edit_message_text(f"❌ Le proxy a répondu par une erreur {response.status_code}.", chat_id=message.chat.id, message_id=status_msg.message_id)
+            bot.edit_message_text(f"❌ L'API C411 a répondu par une erreur {response.status_code}.", chat_id=message.chat.id, message_id=status_msg.message_id)
             return
 
-        # Décodage et analyse du XML
-        root = ElementTree.fromstring(response.content)
-        items = root.findall('.//item')
+        data = response.json()
+        
+        # Structure standard des réponses API (souvent encapsulées dans 'item' ou 'results')
+        items = data.get('item', []) if isinstance(data, dict) else data
+        if not isinstance(items, list):
+            items = data.get('results', [])
 
         if not items:
-            bot.edit_message_text(f"😕 Aucun résultat trouvé sur C411 pour : *{query}*.", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
+            bot.edit_message_text(f"😕 Aucun résultat trouvé sur l'API C411 pour : *{query}*.", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
             return
 
         bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
-        bot.send_message(message.chat.id, f"🍿 **Résultats C411 pour *{query}* :**", parse_mode="Markdown")
+        bot.send_message(message.chat.id, f"🍿 **Résultats API C411 pour *{query}* :**", parse_mode="Markdown")
 
         count = 0
         for item in items:
             if count >= 5:
                 break
                 
-            title = item.find('title').text
-            torrent_link = item.find('link').text
+            title = item.get('title') or item.get('name')
+            # Récupération du lien (généralement dans 'link', 'enclosure' ou 'download')
+            torrent_link = item.get('link') or item.get('download')
+            
+            if not title or not torrent_link:
+                continue
 
             if "DV" in title.upper() and "HDR" not in title.upper():
                 continue
@@ -81,12 +81,10 @@ def search_torrent(message):
             bot.send_message(message.chat.id, f"🎬 *{title}*", reply_markup=markup, parse_mode="Markdown")
             count += 1
 
-    except ElementTree.ParseError:
-        bot.edit_message_text("⚙️ Erreur de décodage : Le flux renvoyé par C411 a expiré ou le passkey configuré est incorrect.", chat_id=message.chat.id, message_id=status_msg.message_id)
     except requests.exceptions.Timeout:
-        bot.edit_message_text("⏱️ Le proxy a mis trop de temps à répondre. Réessaye la recherche.", chat_id=message.chat.id, message_id=status_msg.message_id)
+        bot.edit_message_text("⏱️ L'API C411 a mis trop de temps à répondre.", chat_id=message.chat.id, message_id=status_msg.message_id)
     except Exception as e:
-        bot.edit_message_text(f"❌ Une erreur est survenue : {str(e)}", chat_id=message.chat.id, message_id=status_msg.message_id)
+        bot.edit_message_text(f"❌ Erreur API : Vérifie que ta clé API est bien entrée dans Render.", chat_id=message.chat.id, message_id=status_msg.message_id)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('t_'))
