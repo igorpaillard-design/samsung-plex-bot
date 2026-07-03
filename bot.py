@@ -32,7 +32,7 @@ def search_torrent(message):
 
     # STRUCTURE EXACTE DU FLUX RSS DE C411 POUR LES RECHERCHES
     # Le paramètre 'search' prend le mot-clé, et 'sh' ou l'absence de 'p=torrents' évite les conflits de redirection HTML
-    target_url = f"https://c411.org/rss.php?sh={query}&passkey={C411_PASSKEY}"
+    target_url = f"https://www.c411.org/rss.php?sh={query}&passkey={C411_PASSKEY}"
     
     # Encodage propre pour ScraperAPI
     encoded_url = urllib.parse.quote(target_url)
