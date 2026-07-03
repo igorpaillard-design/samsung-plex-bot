@@ -1,101 +1,136 @@
 import os
 import requests
-import xml.etree.ElementTree as ET
 import telebot
-import threading
 from flask import Flask
+from xml.etree import ElementTree
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# 🔑 CONFIGURATION (N'oublie pas de remettre tes clés !)
-TELEGRAM_TOKEN = "8749995509:AAGpSgdK1qjm2gul0HKoSRhJtFie_JoRLy4"
-ALLDEBRID_API_KEY = "1j7FJtz9XDWpRaJEwrSz"
-C411_PASSKEY = "6d36be5091e57dc7a92d61ae5e688bbe" 
+# --- ⚙️ ZONE DE CONFIGURATION ---
+TELEGRAM_TOKEN = "8749995509:AAGpSgdK1qjm2gul0HKoSRhJtFie_JoRLy4I"
+C411_PASSKEY = "6d36be5091e57dc7a92d61ae5e688bbe"
+SCRAPERAPI_KEY = "aaf70e527297defc81d5bbea36fd8df2"
+ALLDEBRID_TOKEN = "1j7FJtz9XDWpRaJEwrSz"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
+app = Flask(__name__)
 
-def analyser_et_noter_torrent(nom):
-    nom_clean = nom.upper()
-    if "DV" in nom_clean or "DOLBY VISION" in nom_clean:
-        if not any(x in nom_clean for x in ["HDR", "HDR10", "HYBRID", "REMUX", "MULTI"]):
-            return -1000
-            
-    score = 100 
-    if "HDR10PLUS" in nom_clean or "HDR10+" in nom_clean: score += 50  
-    elif "HDR" in nom_clean: score += 20
-    if "ATMOS" in nom_clean or "JOC" in nom_clean: score += 40  
-    if "640" in nom_clean: score += 30  
-    if "320" in nom_clean: score -= 20  
-    if "SUPPLY" in nom_clean or "TALNOR" in nom_clean: score += 10
-    return score
+# Base de données temporaire en mémoire pour stocker les liens des torrents
+# Cela évite le bug Telegram des "callback_data" trop longs (> 64 bytes)
+torrent_storage = {}
+
+@app.route('/')
+def home():
+    return "Your service is live 🎉", 200
 
 @bot.message_handler(commands=['search'])
-def search_movie(message):
-    query = message.text.replace('/search', '').strip()
+def search_torrent(message):
+    query = message.text.replace('/search ', '').strip()
     if not query:
-        bot.reply_to(message, "⚠️ Exemple : `/search Gladiator`")
+        bot.reply_to(message, "❌ Saisis un film après la commande.\nExemple : `/search Gladiator`", parse_mode="Markdown")
         return
+
+    status_msg = bot.reply_to(message, f"🔍 Recherche de *{query}* en cours via proxy résidentiel...", parse_mode="Markdown")
+
+    # URL du flux RSS de C411 contenant ta passkey d'authentification
+    target_url = f"https://www.wawacity.ing/index.php?search={query}&p=torrents&passkey={C411_PASSKEY}"
+    
+    # Encapsulation dans ScraperAPI pour contourner Cloudflare de manière transparente
+    proxy_url = f"http://api.scraperapi.com?api_key={SCRAPERAPI_KEY}&url={target_url}"
+
+    try:
+        response = requests.get(proxy_url, timeout=25)
         
-    bot.reply_to(message, f"🔍 Recherche de *{query}* en direct sur C411...")
-    url_rss = f"https://c411.org/rss.php?feed=search&search={query}&passkey={C411_PASSKEY}"
+        if response.status_code != 200:
+            bot.edit_message_text(f"❌ Le proxy a répondu par une erreur {response.status_code}.", chat_id=message.chat.id, message_id=status_msg.message_id)
+            return
+
+        # Lecture et traitement du XML
+        root = ElementTree.fromstring(response.content)
+        items = root.findall('.//item')
+
+        if not items:
+            bot.edit_message_text("😕 Aucun résultat trouvé pour cette recherche.", chat_id=message.chat.id, message_id=status_msg.message_id)
+            return
+
+        bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
+        bot.send_message(message.chat.id, f"🍿 **Résultats pour *{query}* :**", parse_mode="Markdown")
+
+        count = 0
+        for item in items:
+            if count >= 5:  # On limite aux 5 meilleurs résultats
+                break
+                
+            title = item.find('title').text
+            torrent_link = item.find('link').text
+
+            # Filtrage automatique du Dolby Vision pur (sans HDR) pour éviter les écrans violets sur Plex
+            if "DV" in title.upper() and "HDR" not in title.upper():
+                continue
+
+            # Stockage sécurisé du lien avec un identifiant unique ID court
+            torrent_id = f"t_{hash(torrent_link) & 0xffffffff}"
+            torrent_storage[torrent_id] = {
+                "title": title,
+                "link": torrent_link
+            }
+
+            # Bouton d'action interactif
+            markup = InlineKeyboardMarkup()
+            btn_debrid = InlineKeyboardButton(text="🚀 Envoyer au NAS (AllDebrid)", callback_data=torrent_id)
+            markup.add(btn_debrid)
+
+            bot.send_message(message.chat.id, f"🎬 *{title}*", reply_markup=markup, parse_mode="Markdown")
+            count += 1
+
+    except ElementTree.ParseError:
+        bot.edit_message_text("⚙️ Erreur : Le flux du site est illisible (Blocage Cloudflare persistant).", chat_id=message.chat.id, message_id=status_msg.message_id)
+    except Exception as e:
+        bot.edit_message_text(f"❌ Une erreur est survenue : {str(e)}", chat_id=message.chat.id, message_id=status_msg.message_id)
+
+
+# --- INTERCEPTION DU CLIC SUR LE BOUTON ---
+@bot.callback_query_handler(func=lambda call: call.data.startswith('t_'))
+def handle_debrid_click(call):
+    torrent_id = call.data
+    
+    if torrent_id not in torrent_storage:
+        bot.answer_callback_query(call.id, text="❌ Lien expiré ou introuvable. Relancez la recherche.", show_alert=True)
+        return
+
+    bot.answer_callback_query(call.id, text="⚡ Envoi en cours à AllDebrid...")
+    torrent_data = torrent_storage[torrent_id]
     
     try:
-        response = requests.get(url_rss, timeout=10)
-        if response.status_code != 200:
-            bot.reply_to(message, "❌ Impossible de joindre le site pour le moment.")
-            return
-            
-        root = ET.fromstring(response.content)
-        items = root.findall('.//item')
+        # Requête à l'API AllDebrid pour pousser le lien du torrent (.torrent ou magnet)
+        alldebrid_url = f"https://api.alldebrid.com/v4/magnet/upload?agent=samsungbot&apikey={ALLDEBRID_TOKEN}"
+        payload = {'magnets[]': torrent_data["link"]}
         
-        fichiers_valides = []
-        for item in items:
-            titre = item.find('title').text
-            lien_torrent = item.find('link').text 
-            score = analyser_et_noter_torrent(titre)
-            if score > 0:
-                fichiers_valides.append((score, titre, lien_torrent))
-                
-        fichiers_valides.sort(key=lambda x: x[0], reverse=True)
-        
-        if not fichiers_valides:
-            bot.reply_to(message, "❌ Aucun fichier compatible ou trouvé pour ce film.")
-            return
-            
-        for score, titre, lien in fichiers_valides[:3]:
-            markup = InlineKeyboardMarkup()
-            btn = InlineKeyboardButton("🚀 Envoyer au NAS", callback_data=f"alldeb:{lien}")
-            markup.add(btn)
-            bot.send_message(message.chat.id, f"🏆 *Score : {score}*\n📦 `{titre}`", parse_mode="Markdown", reply_markup=markup)
-            
+        adb_response = requests.post(alldebrid_url, data=payload, timeout=15).json()
+
+        if adb_response.get('status') == 'success':
+            bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text=f"✅ *Envoyé au NAS !*\nLe film `{torrent_data['title']}` est pris en charge par AllDebrid.",
+                parse_mode="Markdown"
+            )
+        else:
+            error_msg = adb_response.get('error', {}).get('message', 'Erreur de traitement')
+            bot.send_message(call.message.chat.id, f"❌ Échec AllDebrid : {error_msg}")
+
     except Exception as e:
-        bot.reply_to(message, f"⚙️ Erreur : {str(e)}")
+        bot.send_message(call.message.chat.id, f"❌ Erreur lors du transfert : {str(e)}")
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('alldeb:'))
-def callback_send_alldebrid(call):
-    url_torrent = call.data.replace('alldeb:', '')
-    bot.answer_callback_query(call.id, "Envoi à AllDebrid...")
-    
-    url_api = f"https://api.alldebrid.com/v4/magnet/upload?agent=samsungbot&apikey={ALLDEBRID_API_KEY}&magnets[]={url_torrent}"
-    r = requests.get(url_api).json()
-    
-    if r.get("status") == "success":
-        bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, 
-                              text=call.message.text + "\n\n✅ *Envoyé sur AllDebrid avec succès !*")
-    else:
-        bot.send_message(call.message.chat.id, "❌ Erreur AllDebrid.")
-
-# --- 🚀 HACK RENDER : Faux serveur Web pour garder le bot en vie ---
-app = Flask(__name__)
-@app.route('/')
-def alive():
-    return "Le bot tourne parfaitement !"
-
-def run_bot():
-    bot.infinity_polling()
 
 if __name__ == "__main__":
-    # Lance le bot Telegram en parallèle
-    threading.Thread(target=run_bot).start()
-    # Lance le serveur Web pour satisfaire Render
-    port = int(os.environ.get("PORT", 5000))
+    # Nettoyage des webhooks précédents pour éviter les conflits
+    bot.remove_webhook()
+    
+    # Lancement du processus d'écoute Telegram en arrière-plan (Non-bloquant)
+    import threading
+    threading.Thread(target=lambda: bot.infinity_polling(skip_pending=True), daemon=True).start()
+    
+    # Démarrage obligatoire du serveur Flask sur le port requis par Render
+    port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
