@@ -1,6 +1,7 @@
 import os
 import requests
 import telebot
+import urllib.parse
 from flask import Flask
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -25,17 +26,21 @@ def search_torrent(message):
 
     status_msg = bot.reply_to(message, f"🔍 Recherche de *{query}* via AllDebrid...", parse_mode="Markdown")
 
-    # Moteur de recherche natif de AllDebrid
-    url = f"https://api.alldebrid.com/v4/user/links/search?agent=samsungbot&apikey={ALLDEBRID_TOKEN}&search={query}"
+    # Encodage propre du texte de recherche pour éviter les bugs d'espaces
+    encoded_query = urllib.parse.quote(query)
+    
+    # Utilisation d'un agent générique et propre recommandé par l'API
+    url = f"https://api.alldebrid.com/v4/user/links/search?agent=mytelegramdownloaderbot&apikey={ALLDEBRID_TOKEN}&search={encoded_query}"
 
     try:
         response = requests.get(url, timeout=15).json()
         
         if response.get('status') != 'success':
-            bot.edit_message_text("❌ Erreur lors de la recherche AllDebrid.", chat_id=message.chat.id, message_id=status_msg.message_id)
+            # On affiche la vraie raison retournée par l'API AllDebrid (ex: "bad_token")
+            error_reason = response.get('error', {}).get('message', 'Clé invalide ou refusée')
+            bot.edit_message_text(f"❌ AllDebrid refuse la connexion :\n`{error_reason}`", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
             return
 
-        # On récupère les torrents trouvés par AllDebrid sur leurs trackers partenaires
         items = response.get('data', {}).get('agents', [])
         
         if not items:
@@ -51,7 +56,6 @@ def search_torrent(message):
                 break
                 
             title = item.get('title')
-            # Lien magnet ou torrent fourni par AllDebrid
             torrent_link = item.get('link') 
             
             if not title or not torrent_link:
@@ -71,7 +75,7 @@ def search_torrent(message):
             count += 1
 
     except Exception as e:
-        bot.edit_message_text(f"❌ Une erreur est survenue.", chat_id=message.chat.id, message_id=status_msg.message_id)
+        bot.edit_message_text(f"❌ Une erreur réseau ou format est survenue.", chat_id=message.chat.id, message_id=status_msg.message_id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('t_'))
 def handle_debrid_click(call):
@@ -84,7 +88,7 @@ def handle_debrid_click(call):
     torrent_data = torrent_storage[torrent_id]
     
     try:
-        alldebrid_url = f"https://api.alldebrid.com/v4/magnet/upload?agent=samsungbot&apikey={ALLDEBRID_TOKEN}"
+        alldebrid_url = f"https://api.alldebrid.com/v4/magnet/upload?agent=mytelegramdownloaderbot&apikey={ALLDEBRID_TOKEN}"
         payload = {'magnets[]': torrent_data["link"]}
         adb_response = requests.post(alldebrid_url, data=payload, timeout=15).json()
 
