@@ -28,31 +28,30 @@ def search_torrent(message):
         bot.reply_to(message, "❌ Saisis un film après la commande.\nExemple : `/search Gladiator`", parse_mode="Markdown")
         return
 
-    status_msg = bot.reply_to(message, f"🔍 Recherche de *{query}* sur C411...", parse_mode="Markdown")
+    status_msg = bot.reply_to(message, f"🔍 Recherche de *{query}* via ScraperAPI sur C411...", parse_mode="Markdown")
 
-    # STRUCTURE EXACTE DU FLUX RSS DE C411 POUR LES RECHERCHES
-    # Le paramètre 'search' prend le mot-clé, et 'sh' ou l'absence de 'p=torrents' évite les conflits de redirection HTML
+    # 1. L'URL ultra-précise avec les www.
     target_url = f"https://www.c411.org/rss.php?sh={query}&passkey={C411_PASSKEY}"
     
-    # Encodage propre pour ScraperAPI
+    # 2. On protège l'URL pour ScraperAPI
     encoded_url = urllib.parse.quote(target_url)
     
-    # Appel via le proxy ScraperAPI en forçant le format texte/xml brut (sans render JavaScript)
+    # 3. On appelle le proxy en mode classique (rapide, sans render graphique inutile pour du XML)
     proxy_url = f"https://api.scraperapi.com?api_key={SCRAPERAPI_KEY}&url={encoded_url}"
 
     try:
-        response = requests.get(proxy_url, timeout=20)
+        response = requests.get(proxy_url, timeout=25)
         
         if response.status_code != 200:
             bot.edit_message_text(f"❌ Le proxy a répondu par une erreur {response.status_code}.", chat_id=message.chat.id, message_id=status_msg.message_id)
             return
 
-        # Décodage du XML
+        # Décodage et analyse du XML
         root = ElementTree.fromstring(response.content)
         items = root.findall('.//item')
 
         if not items:
-            bot.edit_message_text("😕 Aucun résultat trouvé sur C411 pour cette recherche. Vérifie l'orthographe ou ton passkey.", chat_id=message.chat.id, message_id=status_msg.message_id)
+            bot.edit_message_text(f"😕 Aucun résultat trouvé sur C411 pour : *{query}*.", chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="Markdown")
             return
 
         bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
@@ -83,9 +82,9 @@ def search_torrent(message):
             count += 1
 
     except ElementTree.ParseError:
-        bot.edit_message_text("⚙️ Erreur de lecture : Le passkey C411 configuré sur Render semble incorrect ou expiré.", chat_id=message.chat.id, message_id=status_msg.message_id)
+        bot.edit_message_text("⚙️ Erreur de décodage : Le flux renvoyé par C411 a expiré ou le passkey configuré est incorrect.", chat_id=message.chat.id, message_id=status_msg.message_id)
     except requests.exceptions.Timeout:
-        bot.edit_message_text("⏱️ Le serveur a mis trop de temps à répondre. Réessaye la recherche.", chat_id=message.chat.id, message_id=status_msg.message_id)
+        bot.edit_message_text("⏱️ Le proxy a mis trop de temps à répondre. Réessaye la recherche.", chat_id=message.chat.id, message_id=status_msg.message_id)
     except Exception as e:
         bot.edit_message_text(f"❌ Une erreur est survenue : {str(e)}", chat_id=message.chat.id, message_id=status_msg.message_id)
 
