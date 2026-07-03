@@ -7,7 +7,7 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 # --- ⚙️ RÉCUPÉRATION DES VARIABLES SUR RENDER ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 # ICI : Assure-toi que la variable "C411_PASSKEY" sur Render contient bien ta Clé API C411 !
-C411_API_KEY = os.environ.get("C411_PASSKEY") 
+C411_API_KEY = os.environ.get("C411_API_KEY")
 ALLDEBRID_TOKEN = os.environ.get("ALLDEBRID_TOKEN")
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
