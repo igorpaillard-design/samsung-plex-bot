@@ -1,11 +1,12 @@
 import os
 import requests
 import telebot
+import urllib.parse  # Import indispensable pour protéger les adresses web
 from flask import Flask
 from xml.etree import ElementTree
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# --- ⚙️ ZONE DE CONFIGURATION ---
+# --- ⚙️ RÉCUPÉRATION SÉCURISÉE DES CONFIGURATIONS ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 C411_PASSKEY = os.environ.get("C411_PASSKEY")
 SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY")
@@ -29,20 +30,24 @@ def search_torrent(message):
 
     status_msg = bot.reply_to(message, f"🔍 Recherche de *{query}* sur C411...", parse_mode="Markdown")
 
-    # URL DU FLUX RSS OFFICIEL DE C411
+    # 1. On construit l'adresse cible proprement pour C411
     target_url = f"https://c411.org/rss.php?search={query}&p=torrents&passkey={C411_PASSKEY}"
     
-    # Appel via ScraperAPI avec les options premium pour passer la sécurité à coup sûr
-    proxy_url = f"http://api.scraperapi.com?api_key={SCRAPERAPI_KEY}&url={target_url}&render=true&premium=true&antibot=true"
+    # 2. CRUCIAL : On encode l'adresse pour que ScraperAPI la transmette d'un seul bloc sans se mélanger
+    encoded_url = urllib.parse.quote(target_url)
+    
+    # 3. Appel ultra-rapide via HTTPS (sans render=true car c'est du XML brut)
+    proxy_url = f"https://api.scraperapi.com?api_key={SCRAPERAPI_KEY}&url={encoded_url}"
 
     try:
-        response = requests.get(proxy_url, timeout=30)
+        # Requéte avec un timeout standard, la réponse doit arriver en moins de 15 secondes désormais
+        response = requests.get(proxy_url, timeout=20)
         
         if response.status_code != 200:
             bot.edit_message_text(f"❌ Le proxy a répondu par une erreur {response.status_code}.", chat_id=message.chat.id, message_id=status_msg.message_id)
             return
 
-        # Analyse du XML
+        # Analyse du XML reçu
         root = ElementTree.fromstring(response.content)
         items = root.findall('.//item')
 
@@ -78,7 +83,9 @@ def search_torrent(message):
             count += 1
 
     except ElementTree.ParseError:
-        bot.edit_message_text("⚙️ Erreur de lecture : Le flux renvoyé par C411 est mal formé ou bloqué par Cloudflare.", chat_id=message.chat.id, message_id=status_msg.message_id)
+        bot.edit_message_text("⚙️ Erreur de lecture : Le flux renvoyé par C411 est inaccessible ou le passkey est erroné.", chat_id=message.chat.id, message_id=status_msg.message_id)
+    except requests.exceptions.Timeout:
+        bot.edit_message_text("⏱️ Le serveur a mis trop de temps à répondre. Réessaye la recherche.", chat_id=message.chat.id, message_id=status_msg.message_id)
     except Exception as e:
         bot.edit_message_text(f"❌ Une erreur est survenue : {str(e)}", chat_id=message.chat.id, message_id=status_msg.message_id)
 
@@ -122,4 +129,3 @@ if __name__ == "__main__":
     
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
-
