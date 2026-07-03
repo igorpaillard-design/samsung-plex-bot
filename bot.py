@@ -6,7 +6,7 @@ from xml.etree import ElementTree
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # --- ⚙️ ZONE DE CONFIGURATION ---
-TELEGRAM_TOKEN = "8749995509:AAGpSgdK1qjm2gul0HKoSRhJtFie_JoRLy4I"
+TELEGRAM_TOKEN = "8749995509:AAGpSgdK1qjm2gul0HKoSRhJtFie_JoRLy4"
 C411_PASSKEY = "6d36be5091e57dc7a92d61ae5e688bbe"
 SCRAPERAPI_KEY = "aaf70e527297defc81d5bbea36fd8df2"
 ALLDEBRID_TOKEN = "1j7FJtz9XDWpRaJEwrSz"
